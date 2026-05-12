@@ -1,5 +1,5 @@
 streamlit==1.39.0
 databricks-sql-connector==3.4.0
 pandas==2.2.3
-pyarrow==17.0.0
+pyarrow==16.1.0
 setuptools>=68.0.0
