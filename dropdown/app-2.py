@@ -1,7 +1,7 @@
 """
 Databricks Catalog Explorer - Streamlit App
-3 cascading dropdowns: Catalog -> Schemas (multi) -> Tables (multi)
-Real-time refresh button on top.
+Cascading dropdowns: Catalog -> Schemas (multi) -> Tables (multi)
+Refresh button on top.
 """
 
 import os
@@ -21,12 +21,24 @@ st.set_page_config(
 # ============================================================
 # Credentials (from Streamlit secrets or env vars)
 # ============================================================
-HOST = st.secrets.get("DBX_HOST", os.getenv("DBX_HOST", ""))
-HTTP_PATH = st.secrets.get("DBX_HTTP_PATH", os.getenv("DBX_HTTP_PATH", ""))
-TOKEN = st.secrets.get("DBX_TOKEN", os.getenv("DBX_TOKEN", ""))
+def _get_secret(key: str) -> str:
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return os.getenv(key, "")
+
+HOST = _get_secret("DBX_HOST")
+HTTP_PATH = _get_secret("DBX_HTTP_PATH")
+TOKEN = _get_secret("DBX_TOKEN")
 
 if not all([HOST, HTTP_PATH, TOKEN]):
-    st.error("❌ Missing Databricks credentials. Set DBX_HOST, DBX_HTTP_PATH, DBX_TOKEN in Streamlit secrets.")
+    st.error(
+        "❌ Missing Databricks credentials.\n\n"
+        "Set **DBX_HOST**, **DBX_HTTP_PATH**, **DBX_TOKEN** in Streamlit Cloud → "
+        "App Settings → Secrets."
+    )
     st.stop()
 
 
@@ -46,7 +58,6 @@ def get_connection():
 # ============================================================
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_catalogs():
-    """Return list of all catalogs."""
     try:
         with get_connection() as conn:
             cur = conn.cursor()
@@ -60,16 +71,12 @@ def fetch_catalogs():
 
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_schemas(catalog: str):
-    """Return list of schemas in a given catalog."""
     try:
         with get_connection() as conn:
             cur = conn.cursor()
             cur.execute(f"SHOW SCHEMAS IN `{catalog}`")
             rows = cur.fetchall()
-        # SHOW SCHEMAS returns columns: databaseName
-        schemas = [r[0] for r in rows]
-        # Remove system/information_schema noise but keep if user wants
-        return sorted(schemas)
+        return sorted([r[0] for r in rows])
     except Exception as e:
         st.error(f"Error fetching schemas for `{catalog}`: {e}")
         return []
@@ -77,7 +84,6 @@ def fetch_schemas(catalog: str):
 
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_tables(catalog: str, schema: str):
-    """Return DataFrame of tables in catalog.schema."""
     try:
         with get_connection() as conn:
             cur = conn.cursor()
@@ -95,7 +101,6 @@ def fetch_tables(catalog: str, schema: str):
 
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_table_details(catalog: str, schema: str, table: str):
-    """Return DataFrame with column info for a table."""
     try:
         with get_connection() as conn:
             cur = conn.cursor()
@@ -112,7 +117,7 @@ def fetch_table_details(catalog: str, schema: str, table: str):
 # UI
 # ============================================================
 st.title("🗂️ Databricks Catalog Explorer")
-st.caption("Real-time view of Unity Catalog · auto-refresh every 30s")
+st.caption("Real-time view of Unity Catalog · cache 30s · click Refresh to force re-fetch")
 
 # --- Top refresh bar ---
 top_l, top_r = st.columns([1, 5])
@@ -152,7 +157,7 @@ selected_schemas = st.multiselect(
     placeholder="Choose one or more schemas",
 )
 
-# --- Box 3: Tables (multi-select, combined from all selected schemas) ---
+# --- Box 3: Tables (multi-select) ---
 st.subheader("3️⃣ Select Table(s)")
 
 all_tables_df = pd.DataFrame()
@@ -166,14 +171,12 @@ if selected_schemas:
             frames.append(df)
     if frames:
         all_tables_df = pd.concat(frames, ignore_index=True)
-        # Display format: schema.table for clarity when multiple schemas selected
         name_col = "tableName" if "tableName" in all_tables_df.columns else all_tables_df.columns[2]
         db_col = "database" if "database" in all_tables_df.columns else all_tables_df.columns[1]
-        table_options = [
+        table_options = sorted({
             f"{row[db_col]}.{row[name_col]}"
             for _, row in all_tables_df.iterrows()
-        ]
-        table_options = sorted(set(table_options))
+        })
 
 selected_tables = st.multiselect(
     "Tables (one or more)",
@@ -188,7 +191,7 @@ st.divider()
 # Results
 # ============================================================
 if selected_tables:
-    st.subheader("📋 Selected Tables — Details")
+    st.subheader("📋 Selected Tables — Column Details")
     for full_name in selected_tables:
         schema_name, table_name = full_name.split(".", 1)
         with st.expander(f"📄 `{selected_catalog}.{schema_name}.{table_name}`", expanded=False):
@@ -198,7 +201,7 @@ if selected_tables:
             else:
                 st.info("No column info available.")
 elif selected_schemas and not all_tables_df.empty:
-    st.subheader(f"📋 All Tables in selected schema(s)")
+    st.subheader("📋 All Tables in selected schema(s)")
     st.dataframe(all_tables_df, use_container_width=True, hide_index=True)
 else:
     st.info("👆 Select a catalog, schema(s), and table(s) to view details.")
@@ -210,10 +213,9 @@ st.divider()
 with st.expander("ℹ️ About this app"):
     st.markdown(
         """
-        - **Catalog** dropdown lists all catalogs you have access to.
-        - **Schema** is a multi-select — choose one or many.
-        - **Table** is a multi-select — choose one or many tables from the chosen schemas.
-        - Click **🔄 Refresh** at the top to see newly created catalogs / schemas / tables.
-        - Cached for 30 seconds for performance; refresh forces immediate re-fetch.
+        - **Catalog** dropdown — all catalogs you have access to.
+        - **Schema** — multi-select, one or many.
+        - **Table** — multi-select, from all selected schemas (shown as `schema.table`).
+        - **🔄 Refresh** clears the 30s cache and pulls fresh data.
         """
     )
